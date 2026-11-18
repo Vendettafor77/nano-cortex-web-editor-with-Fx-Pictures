@@ -671,11 +671,13 @@
 
     function knob(name, index, value = null, meta = null) {
       const resolvedMeta = meta || inferParamMeta('', name);
+      const initial = value ?? defaultParamValue(resolvedMeta);
       return {
         type: resolvedMeta.kind === 'enum' ? 'switch' : 'knob',
         name,
         index,
-        value: value === null ? defaultParamValue(resolvedMeta) : value,
+        value: initial,
+        defaultValue: initial,
         meta: resolvedMeta,
         labels: resolvedMeta.kind === 'enum' ? resolvedMeta.options : null
       };
@@ -685,12 +687,14 @@
       return labels.map((label, index) => {
         const parsed = parseParamLabel(label);
         const meta = inferParamMeta(modelName, parsed.name, parsed.options);
+        const initial = defaultParamValue(meta);
         return {
           type: meta.kind === 'enum' ? 'switch' : 'knob',
           name: parsed.name,
           index,
           labels: meta.kind === 'enum' ? meta.options : null,
-          value: defaultParamValue(meta),
+          value: initial,
+          defaultValue: initial,
           meta
         };
       });
@@ -751,6 +755,8 @@
       }
 
       if (typeof meta.defaultValue === 'number') return meta.defaultValue;
+      if (meta.offAt === 'min') return meta.min;
+      if (meta.offAt === 'max') return meta.max;
       if (meta.min !== undefined && meta.max !== undefined) return roundToStep((meta.min + meta.max) / 2, meta.step || 0.1);
 
       return 5;
@@ -913,7 +919,7 @@
 
       // DrD85/nano-cortex-editor's calibrated PARAM_SKEW for Low-High Cut.
       if (m === 'low-high cut' && (p === 'hpf freq' || p === 'lpf freq')) {
-        return rangeMeta(20, 20000, 1, 'Hz', 0, 0.3);
+        return { ...rangeMeta(20, 20000, 1, 'Hz', 0, 0.3), defaultValue: p === 'hpf freq' ? 20 : 20000 };
       }
       if (p.includes('freq')) return rangeMeta(20, 20000, 1, 'Hz', 0);
       if (p === 'hpf' || p === 'high pass') {
@@ -1058,6 +1064,11 @@
       'Hall': 'img/Hall.png',
       'Room': 'img/Room reverb.png',
       'Shimmer': 'img/Shimmer Reverb.png',
+      // Pedal Playground transparent PNGs (app/images/pedals).
+      'Poly Octaver': 'img/ehx-micro-pog.png',
+      'Wham': 'img/digitech-whammy.png',
+      'Chief OC2': 'img/boss-oc2.png',
+      'Blossom (ST)': 'img/strymon-bigsky.png',
 
       'Bass Wah': 'img/Bass wah.png',
       'Bass wah': 'img/Bass wah.png',
@@ -1100,6 +1111,9 @@
       'Love Meat': 'img/Lovetone Meatball.png'
     };
 
+    const AMP_DEFAULTS = { gain: 128, bass: 128, mid: 128, treble: 128, level: 64 };
+    const CAB_DEFAULTS = { levelDb: 0, highPassHz: 20, lowPassHz: 20000 };
+
     const state = {
       device: null,
       server: null,
@@ -1130,9 +1144,7 @@
         lastActiveSlot: 1,
         mic: 'Dynamic 57',
         position: 1,
-        levelDb: 0,
-        highPassHz: 20,
-        lowPassHz: 20000,
+        ...CAB_DEFAULTS,
         paramsLoaded: false
       },
       feBytes: [],
@@ -1154,7 +1166,7 @@
         post3: { title: 'Post FX 3', key: 'post3', color: 'var(--red)', model: 'None', on: false, models: [{ name: 'None', category: 'Bypass', params: [] }].concat(postFx3Models), params: [] }
       },
       gate: { on: false, params: [knob('Reduction', 0, 50, rangeMeta(0, 100, 1, '%', 0))] },
-      amp: { gain: 64, level: 64, bass: 64, mid: 64, treble: 64 }
+      amp: { ...AMP_DEFAULTS }
     };
 
     const blockSlotConfig = {
@@ -1582,6 +1594,7 @@
 
     const captureSlider = document.getElementById('captureVolumeSlider');
     const captureValue  = document.getElementById('captureVolumeValue');
+    bindSliderReset(captureSlider, 0);
 
     captureSlider.addEventListener('input', () => {
       captureValue.textContent =
@@ -3134,6 +3147,52 @@ function parseSelectedCaptureState(payload) {
       valueEl.textContent = text;
     }
 
+    function isResetClick(event) {
+      return event.button === 0 && event.metaKey;
+    }
+
+    function bindSliderReset(slider, defaultValue) {
+      slider.title = '⌘-click to reset to ' + defaultValue;
+      slider.addEventListener('pointerdown', event => {
+        if (slider.disabled || !isResetClick(event)) return;
+        event.preventDefault();
+        if (Number(slider.value) === defaultValue) return;
+        slider.value = defaultValue;
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+
+    function bindKnobDrag(element, readTravel, applyTravel, reset, disabled = false) {
+      element.addEventListener('pointerdown', event => {
+        if (disabled || event.button !== 0) return;
+        event.preventDefault();
+        if (isResetClick(event)) {
+          reset();
+          return;
+        }
+
+        let previousY = event.clientY;
+        let travel = readTravel();
+        const pointerId = event.pointerId;
+        const onMove = move => {
+          if (move.pointerId !== pointerId) return;
+          const scale = move.shiftKey ? 0.1 : 1;
+          travel = clamp(travel + (previousY - move.clientY) * scale / 95, 0, 1);
+          previousY = move.clientY;
+          applyTravel(travel);
+        };
+        const onUp = up => {
+          if (up.pointerId !== pointerId) return;
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          window.removeEventListener('pointercancel', onUp);
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+      });
+    }
+
     function promptManualValue(blockKey, param) {
       const meta = param.meta || rangeMeta(0, 10, 0.1, '', 1);
 
@@ -3444,15 +3503,15 @@ function parseSelectedCaptureState(payload) {
 
       box.appendChild(renderVerticalSlider('Level', 'cabLevelSlider', -96, 12, 0.1, 'dB', state.cabIR.levelDb, value => {
         setCabIRLevelDb(value);
-      }, on));
+      }, on, CAB_DEFAULTS.levelDb));
 
       box.appendChild(renderVerticalSlider('High Pass', 'cabHighPassSlider', 20, 800, 1, 'Hz', state.cabIR.highPassHz, value => {
         setCabIRHighPassHz(value);
-      }, on));
+      }, on, CAB_DEFAULTS.highPassHz));
 
       box.appendChild(renderVerticalSlider('Low Pass', 'cabLowPassSlider', 1000, 20000, 1, 'Hz', state.cabIR.lowPassHz, value => {
         setCabIRLowPassHz(value);
-      }, on));
+      }, on, CAB_DEFAULTS.lowPassHz));
     }
 
     function renderSmallSelect(label, id, options, enabled, selectedValue, onChange) {
@@ -3489,7 +3548,7 @@ function parseSelectedCaptureState(payload) {
       return wrap;
     }
 
-    function renderVerticalSlider(label, id, min, max, step, unit, value, onChange, enabled) {
+    function renderVerticalSlider(label, id, min, max, step, unit, value, onChange, enabled, defaultValue) {
       const wrap = document.createElement('div');
       wrap.className = 'placeholder-param';
       wrap.style.opacity = enabled === false ? '0.35' : '1';
@@ -3508,6 +3567,7 @@ function parseSelectedCaptureState(payload) {
       slider.value = value;
       slider.disabled = enabled === false;
       slider.style.width = '90px';
+      bindSliderReset(slider, defaultValue);
 
       const valueText = document.createElement('div');
       valueText.className = 'value-text';
@@ -3573,11 +3633,12 @@ function renderGate() {
       const pill = document.createElement('button');
       pill.className = 'switch-pill';
       pill.textContent = param.meta.options[param.value] || param.meta.options[0] || '—';
-      pill.title = param.meta.options.join(' → ');
+      pill.title = param.meta.options.join(' → ') + ' · ⌘-click to reset';
 
-      pill.addEventListener('click', () => {
+      pill.addEventListener('click', event => {
         if (disabled) return;
-        const next = (Number(param.value) + 1) % param.meta.options.length;
+        const next = isResetClick(event) ? param.defaultValue : (Number(param.value) + 1) % param.meta.options.length;
+        if (next === param.value) return;
         param.value = next;
         render();
 
@@ -3601,6 +3662,7 @@ function renderGate() {
       const select = document.createElement('select');
       select.className = 'stepped-select';
       select.disabled = disabled;
+      select.title = '⌘-click to reset';
 
       param.meta.options.forEach((label, idx) => {
         const opt = document.createElement('option');
@@ -3614,6 +3676,13 @@ function renderGate() {
         param.value = Number(e.target.value);
         render();
         if (canSend && FX_BLOCK_KEYS.includes(blockKey)) setFXParam(blockKey, param);
+      });
+      select.addEventListener('pointerdown', event => {
+        if (select.disabled || !isResetClick(event)) return;
+        event.preventDefault();
+        if (param.value === param.defaultValue) return;
+        select.value = String(param.defaultValue);
+        select.dispatchEvent(new Event('change', { bubbles: true }));
       });
 
       p.appendChild(select);
@@ -3640,7 +3709,8 @@ function renderGate() {
 
       knobEl.style.setProperty('--pct', pct + '%');
       knobEl.style.setProperty('--angle', angle + 'deg');
-      knobEl.title = disabled ? 'Locked by Sync setting' : 'Drag for coarse adjustment, scroll for fine adjustment';
+      knobEl.title = disabled ? 'Locked by Sync setting'
+        : '⌘-click to reset · Shift-drag or scroll to fine-tune';
 
       const value = document.createElement('div');
       value.className = 'value-text';
@@ -3663,30 +3733,13 @@ function renderGate() {
         applyValue(Number(param.value) + delta);
       }, { passive: false });
 
-      knobEl.addEventListener('pointerdown', e => {
+      const reset = () => applyValue(param.defaultValue);
+      bindKnobDrag(knobEl, () => paramValueToNormalized(param),
+        travel => applyValue(normalizedToParamValue(param, travel)), reset, disabled);
+      value.addEventListener('click', event => {
         if (disabled) return;
-        e.preventDefault();
-
-        const dragStartY = e.clientY;
-        const dragStartTravel = paramValueToNormalized(param);
-
-        const onMove = moveEvent => {
-          const travel = dragStartTravel + (dragStartY - moveEvent.clientY) / 95;
-          applyValue(normalizedToParamValue(param, travel));
-        };
-
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          window.removeEventListener('pointercancel', onUp);
-        };
-
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
-        window.addEventListener('pointercancel', onUp);
-      });
-      value.addEventListener('click', () => {
-        if (!disabled) promptManualValue(blockKey, param);
+        if (isResetClick(event)) reset();
+        else promptManualValue(blockKey, param);
       });
 
       p.appendChild(name);
@@ -3729,12 +3782,16 @@ function renderGate() {
 
       knobEl.style.setProperty('--pct', pct + '%');
       knobEl.style.setProperty('--angle', angle + 'deg');
-      knobEl.title = 'Drag for coarse adjustment, scroll for fine adjustment';
+      knobEl.title = '⌘-click to reset · Shift-drag or scroll to fine-tune';
 
       const value = document.createElement('div');
       value.className = 'value-text';
       value.textContent = Math.round((raw / 255) * 100) + '%';
-      value.addEventListener('click', () => {
+      value.addEventListener('click', event => {
+        if (isResetClick(event)) {
+          applyRaw(AMP_DEFAULTS[key]);
+          return;
+        }
         const entered = window.prompt('Enter value for ' + label + ' (0 to 100%)', String(Math.round((state.amp[key] / 255) * 100)));
         if (entered === null) return;
         const pctValue = clamp(Number(entered), 0, 100);
@@ -3755,26 +3812,8 @@ function renderGate() {
         applyRaw(state.amp[key] + (e.deltaY < 0 ? 3 : -3));
       }, { passive: false });
 
-      knobEl.addEventListener('pointerdown', e => {
-        e.preventDefault();
-        const dragStartY = e.clientY;
-        const dragStartValue = state.amp[key];
-
-        const onMove = moveEvent => {
-          const delta = ((dragStartY - moveEvent.clientY) / 95) * 255;
-          applyRaw(dragStartValue + delta);
-        };
-
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          window.removeEventListener('pointercancel', onUp);
-        };
-
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
-        window.addEventListener('pointercancel', onUp);
-      });
+      bindKnobDrag(knobEl, () => state.amp[key] / 255,
+        travel => applyRaw(travel * 255), () => applyRaw(AMP_DEFAULTS[key]));
 
       p.appendChild(name);
       p.appendChild(knobEl);
