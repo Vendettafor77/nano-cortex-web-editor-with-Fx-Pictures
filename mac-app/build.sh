@@ -9,9 +9,10 @@ fi
 mkdir -p "$(dirname "$app")"
 /usr/bin/osacompile -s -o "$app" "$root/mac-app/main.applescript"
 resources="$app/Contents/Resources"
-mkdir -p "$resources/web/img"
+mkdir -p "$resources/web"
 cp "$root/Index V3.0.html" "$root/LICENSE" "$root/mac-app/LICENSE.nanos-upstream" "$resources/web/"
-find "$root/img" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.webp' \) -exec cp -p {} "$resources/web/img/" \;
+/usr/bin/ditto "$root/img" "$resources/web/img"
+/usr/bin/ditto "$root/fonts" "$resources/web/fonts"
 cp "$root/mac-app/"{activate.sh,editor_session.py,main.applescript} "$resources/Scripts/"
 cp "$root/mac-app/applet.icns" "$resources/applet.icns"
 /usr/bin/plutil -replace CFBundleIdentifier -string com.local.nanocortexeditor "$app/Contents/Info.plist"

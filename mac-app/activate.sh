@@ -9,7 +9,7 @@ for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
   if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
 done
 if [ "$#" -gt 0 ]; then
-  exec "$PYTHON" "$SCRIPT_DIR/editor_session.py" "$1" "$WEB_DIR"
+  exec "$PYTHON" "$SCRIPT_DIR/editor_session.py" "$1" "$WEB_DIR" "$PROFILE_DIR" "$CHROME_APP"
 fi
 
 if [ ! -d "$CHROME_APP" ]; then
@@ -41,6 +41,7 @@ if ! "$PYTHON" "$SCRIPT_DIR/editor_session.py" --status; then
     --disable-sync \
     --disable-background-mode \
     --disable-background-networking \
+    --enable-features=WebBluetoothNewPermissionsBackend \
     --remote-debugging-port=8766 \
     --app="$EDITOR_URL" || exit 1
   for i in {1..20}; do
